@@ -6,8 +6,8 @@ import re
 data_folder = 'data'
 output_file = 'training_matrix_sully.csv'
 
-# Your verified coordinates (Cartesian: X=0..63, Y=0..63 where 0 is BOTTOM)
-# Format: 'Name': (Column_X, Row_Y)
+# COORDONNEES VALIDEES PAR R (Ligne = Index R, Colonne = Index R)
+# On ne parle plus de X/Y pour ne pas s'embrouiller.
 targets = {
     'parc_chateau':     (27, 50),
     'centre_sully':     (18, 42),
@@ -27,32 +27,27 @@ target_names = list(targets.keys())
 for filename in files:
     try:
         # A. EXTRACT INPUTS (From Filename)
-        # Remove extension and split by '='
         name_clean = filename.replace('.csv', '')
         if '=' not in name_clean: continue
         _, values_str = name_clean.split('=')
         
-        # Clean the suffix (e.g. "_maxH_sully")
         val_parts = values_str.split(',')
         val_parts[-1] = re.match(r'^-?\d+(\.\d+)?', val_parts[-1]).group(0)
-        
-        # Convert to floats
         inputs = [float(v) for v in val_parts]
 
         # B. EXTRACT OUTPUTS (From Grid Content)
         file_path = os.path.join(data_folder, filename)
-        df = pd.read_csv(file_path, index_col=0) # Read grid (64x64)
+        
+        # index_col=0 car la première colonne de tes CSV contient les numéros de ligne (1, 2, 3...)
+        df = pd.read_csv(file_path, index_col=0) 
         
         outputs = []
-        for name, (x, y) in targets.items():
-            # IMPORTANT: FLIP Y
-            # Your Y=50 is North (Top), Y=11 is South (Bottom).
-            # DataFrame Row 0 is Top, Row 63 is Bottom.
-            # So: Matrix_Row = 63 - Coordinate_Y
-            row_idx = 63 - y 
-            col_idx = x
+        for name, (ligne_r, col_r) in targets.items():
             
-            # Extract value
+            row_idx = ligne_r - 1
+            col_idx = col_r - 1
+            
+            # Extraction simple
             val = df.iloc[row_idx, col_idx]
             outputs.append(val)
 
@@ -66,10 +61,10 @@ for filename in files:
 # --- 3. SAVE RESULT ---
 final_df = pd.DataFrame(dataset, columns=input_names + target_names)
 
-# Sanity Check: Show me if we actually found water
+# Vérification finale
 print("\n--- MATRIX REPORT ---")
 print(f"Total Rows: {len(final_df)}")
-print("\nMax Water Levels found (check if these are > 0):")
+print("\nMax Water Levels found (Doit être > 0 partout !):")
 print(final_df[target_names].max())
 
 final_df.to_csv(output_file, index=False)
