@@ -1,104 +1,80 @@
 import pandas as pd
 import xgboost as xgb
 import matplotlib.pyplot as plt
-import joblib # Pour sauvegarder le modèle
-from sklearn.model_selection import train_test_split
+import joblib
+import numpy as np
+from sklearn.model_selection import train_test_split, KFold, cross_validate
 from sklearn.metrics import r2_score, root_mean_squared_error
 from sklearn.preprocessing import StandardScaler
-from sklearn.inspection import permutation_importance
 
-# --- 1. CHARGEMENT ET PRÉPARATION (Protocole Commun) ---
+# --- 1. CHARGEMENT ET PRÉPARATION ---
 print("Chargement des données...")
-# Adapte le chemin si ton fichier csv n'est pas dans le même dossier
 df = pd.read_csv("training_matrix_sully.csv")
 
-# Définition des entrées (X) et sorties (Y)
 features = ['er', 'ks2', 'ks3', 'ks4', 'ks_fp', 'of', 'qmax', 'tm']
 targets = ['parc_chateau', 'centre_sully', 'gare_sully', 'caserne_pompiers']
 
 X = df[features]
 y = df[targets]
 
-# SPLIT TRAIN/TEST (Le même pour tout le monde !)
+# On garde un test set fixe pour la vérification finale (20%)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# SCALING (Optionnel pour XGBoost mais conseillé pour rester cohérent avec l'équipe)
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=features)
+X_test_scaled = pd.DataFrame(scaler.transform(X_test), columns=features)
 
-# On remet en DataFrame pour garder les noms de colonnes (utile pour l'importance des variables)
-X_train_scaled = pd.DataFrame(X_train_scaled, columns=features)
-X_test_scaled = pd.DataFrame(X_test_scaled, columns=features)
+# --- 2. CONFIGURATION DE LA CROSS-VALIDATION COMMUNE ---
+# C'est cet objet kf que tes camarades doivent copier/coller
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
-# --- 2. ENTRAÎNEMENT DU BOOSTING (BOUCLE SUR LES 4 LIEUX) ---
+# --- 3. ENTRAÎNEMENT ET VALIDATION CROISÉE ---
 models = {}
-scores = {}
 
-print("\n--- DÉBUT DE L'ENTRAÎNEMENT XGBOOST ---")
+print("\n--- DÉBUT DE L'ÉVALUATION (CROSS-VALIDATION) ---")
 
 for lieu in targets:
-    print(f"🔄 Entraînement pour : {lieu}...")
+    print(f"\n🔄 Analyse pour : {lieu}")
     
-    # Création du modèle XGBoost
-    # n_estimators = nombre d'arbres (100 est standard, tu peux monter à 500)
-    # learning_rate = vitesse d'apprentissage (0.1 est standard)
+    # Modèle avec tes hyperparamètres
     model = xgb.XGBRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
     
-    # Entraînement
+    # Lancement de la Cross-Validation sur le Train Set
+    cv_results = cross_validate(
+        model, X_train_scaled, y_train[lieu], 
+        cv=kf, 
+        scoring=['r2', 'neg_root_mean_squared_error'],
+        n_jobs=-1
+    )
+    
+    # Calcul des moyennes
+    r2_cv = cv_results['test_r2'].mean()
+    rmse_cv = -cv_results['test_neg_root_mean_squared_error'].mean()
+    std_r2 = cv_results['test_r2'].std()
+
+    print(f"   📊 Score R2 moyen (CV) : {r2_cv:.4f} (+/- {std_r2 * 2:.4f})")
+    print(f"   📉 RMSE moyen (CV)     : {rmse_cv:.4f} m")
+
+    # --- ENTRAÎNEMENT FINAL ---
+    # On entraîne sur TOUT le train set pour la sauvegarde
     model.fit(X_train_scaled, y_train[lieu])
     
-    # Prédiction sur le Test set (jamais vu par le modèle)
-    y_pred = model.predict(X_test_scaled)
+    # Test rapide sur le Test Set (indépendant de la CV)
+    final_pred = model.predict(X_test_scaled)
+    final_r2 = r2_score(y_test[lieu], final_pred)
     
-    # Évaluation
-    r2 = r2_score(y_test[lieu], y_pred)
-    rmse = root_mean_squared_error(y_test[lieu], y_pred)
+    print(f"   ✅ Vérification Test Set : R2 = {final_r2:.4f}")
     
-    print(f"   ✅ R2 Score : {r2:.4f}")
-    print(f"   📉 RMSE (m) : {rmse:.4f}")
-    
-    # Sauvegarde dans le dictionnaire
+    # Sauvegarde
     models[lieu] = model
-    scores[lieu] = r2
-    
-    # Sauvegarde du fichier physique pour l'App (IMPORTANT pour Jeudi !)
     joblib.dump(model, f"xgboost_{lieu}.pkl")
 
+# --- 4. RÉSUMÉ POUR LA COMPARAISON ---
+print("\n" + "="*30)
+print("TABLEAU DE COMPARAISON (À donner à l'équipe)")
+print("="*30)
+for lieu in targets:
+    # On reprend les scores calculés plus haut
+    print(f"{lieu.upper():<20} | R2: {scores_r2_cv_display[lieu]:.4f} | RMSE: {scores_rmse_cv_display[lieu]:.4f}")
 
-# --- 3. ANALYSE : IMPORTANCE DES VARIABLES ---
-print("\n--- ANALYSE DE L'IMPORTANCE DES VARIABLES ---")
-for lieu_analyse in targets:
-    print(f"📊 Génération du graphique d'importance pour {lieu_analyse}...")
-    try:
-        xgb.plot_importance(
-            models[lieu_analyse],
-            importance_type='weight',
-            title=f"Facteurs d'impact - {lieu_analyse}"
-        )
-        plt.tight_layout()
-        plt.show()
-    except ValueError:
-        print(f"   ℹ️ Importance XGBoost vide pour {lieu_analyse}. Essai par permutation...")
-        r = permutation_importance(
-            models[lieu_analyse],
-            X_test_scaled,
-            y_test[lieu_analyse],
-            n_repeats=10,
-            random_state=42,
-            n_jobs=-1
-        )
-        importances = pd.Series(r.importances_mean, index=X_test_scaled.columns)
-        if (importances.abs().sum() == 0):
-            print(f"   ⚠️ Aucune importance détectée pour {lieu_analyse} (cible probablement constante).")
-        else:
-            importances.sort_values().plot(
-                kind="barh",
-                title=f"Permutation importance - {lieu_analyse}",
-                figsize=(10, 6)
-            )
-            plt.tight_layout()
-            plt.show()
-
-print("\n--- TERMINÉ ---")
-print("Tes modèles .pkl sont sauvegardés. Envoie-les à la personne qui fait l'App !")
+print("\nFichiers .pkl générés. N'oublie pas de donner ton scaler aussi s'ils en ont besoin !")
