@@ -17,48 +17,80 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. LOADING ASSETS ---
-@st.cache_resource
-def load_models_and_scaler():
-    base_path = Path("boosting") # Ensure this matches your folder structure
-    
-    targets = ['parc_chateau', 'centre_sully', 'gare_sully', 'caserne_pompiers']
-    models = {}
-    
-    # Try loading XGBoost models (fallback to others if needed)
+# --- HELPER: SAFE IMAGE ---
+BASE_DIR = Path(__file__).parent
+
+def safe_image(path, caption=None, **kwargs):
+    # Convert string to Path object
+    p = Path(path)
+    # If not absolute, make it relative to BASE_DIR
+    if not p.is_absolute():
+        p = BASE_DIR / p
+        
+    if p.exists():
+        st.image(str(p), caption=caption, **kwargs)
+    else:
+        st.warning(f"Image not found: {p.name} (Placeholder)")
+
+# --- HELPER: ROBUST PREDICTION ---
+def safe_scalar_predict(model, X):
+    """Ensures prediction returns a single float scalar."""
     try:
-        scaler = joblib.load(base_path / "scaler.pkl")
-        for t in targets:
-            models[t] = joblib.load(base_path / f"xgboost_{t}.pkl")
+        p = model.predict(X)
+        # Convert to numpy array and flatten if it's multidimensional (like (N,1) from Keras)
+        p = np.array(p).flatten()
+        if len(p) > 0:
+            return float(p[0])
     except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None, None
+        # st.warning(f"Prediction error: {e}") 
+        pass
+    return 0.0
 
-    return models, scaler, targets
+def safe_vector_predict(model, X):
+    """Ensures prediction returns a 1D array of floats."""
+    try:
+        p = model.predict(X)
+        return np.array(p).flatten()
+    except Exception as e:
+        return np.zeros(X.shape[0])
 
-# --- 1. CHARGEMENT MULTI-MODÈLES ---
+# --- 1. CHARGEMENT MULTI-MODÈLES ET SCALERS ---
 @st.cache_resource
 def load_all_models():
-    # Chemins basés sur ton repo
+    # Chemins absolus basés sur l'emplacement du script
+    BASE_DIR = Path(__file__).parent
     paths = {
-        "XGBoost": Path("boosting"),
-        "RandomForest": Path("randomforest/pickels"),  # Attention au dossier "pickels" vs "pickles"
-        "Ridge": Path("modele_Ridge") # Si tu as exporté ces modèles
+        "XGBoost": BASE_DIR / "boosting",
+        "RandomForest": BASE_DIR / "randomforest/pickels",
+        "Ridge": BASE_DIR / "modele_Ridge/pickle",
+        "NeuralNet": BASE_DIR / "neural_network/tensorflow/pkls"
     }
     
     targets = ['parc_chateau', 'centre_sully', 'gare_sully', 'caserne_pompiers']
-    model_store = {t: {} for t in targets} # Structure: {'parc_chateau': {'XGBoost': model, 'RF': model...}}
+    model_store = {t: {} for t in targets}
+    scalers = {}
+
+    # 1. Scalers
+    try: scalers["XGBoost"] = joblib.load(paths["XGBoost"] / "scaler.pkl")
+    except Exception as e: print(f"XGB Scaler failed: {e}")
     
-    # Charger le Scaler (nécessaire pour Ridge/Lasso/NeuralNet, pas pour RF/XGB en théorie mais utile si standardisé)
-    scaler = joblib.load(paths["XGBoost"] / "scaler.pkl")
+    # RandomForest
+    try: scalers["RandomForest"] = joblib.load(paths["RandomForest"] / "rf_scaler.pkl")
+    except Exception as e: print(f"RF Scaler failed: {e}") 
 
-    # Charger XGBoost
+    try: scalers["Ridge"] = joblib.load(paths["Ridge"] / "ridge_lasso_scaler.pkl")
+    except Exception as e: print(f"Ridge Scaler failed: {e}")
+
+    try: scalers["NeuralNet"] = joblib.load(paths["NeuralNet"] / "scaler.pkl")
+    except Exception as e: print(f"NN Scaler failed: {e}")
+
+    # 2. Models
+    # XGBoost
     for t in targets:
-        try:
-            model_store[t]["XGBoost"] = joblib.load(paths["XGBoost"] / f"xgboost_{t}.pkl")
-        except: pass
+        try: model_store[t]["XGBoost"] = joblib.load(paths["XGBoost"] / f"xgboost_{t}.pkl")
+        except Exception as e: print(f"Failed to load XGBoost {t}: {e}")
 
-    # Charger Random Forest (Adapter les noms de fichiers si nécessaire, ex: RF_CasernePompiers.pkl)
+    # Random Forest
     rf_names = {
         'parc_chateau': 'RF_ParcChateau.pkl',
         'centre_sully': 'RF_CentreSully.pkl',
@@ -66,14 +98,24 @@ def load_all_models():
         'caserne_pompiers': 'RF_CasernePompiers.pkl'
     }
     for t, filename in rf_names.items():
-        try:
-            model_store[t]["Random Forest"] = joblib.load(paths["RandomForest"] / filename)
-        except: pass
+        try: model_store[t]["RandomForest"] = joblib.load(paths["RandomForest"] / filename)
+        except Exception as e: st.error(f"Failed to load RandomForest {t}: {e}")
 
-    return model_store, scaler, targets
+    # Ridge - Models are in a subfolder 'ridge'
+    for t in targets:
+        try: model_store[t]["Ridge"] = joblib.load(paths["Ridge"] / f"ridge/ridge_{t}.pkl")
+        except Exception as e: st.error(f"Failed to load Ridge {t}: {e}")
 
-models, scaler, targets = load_models_and_scaler()
-model_store, scaler, targets = load_all_models()
+    # NeuralNet
+    for t in targets:
+        try: 
+            model_store[t]["NeuralNet"] = joblib.load(paths["NeuralNet"] / f"keras_model_{t}.pkl")
+        except Exception as e: 
+            st.error(f"Failed to load NeuralNet {t}: {e}")
+    
+    return model_store, scalers, targets
+
+model_store, scalers, targets = load_all_models()
 
 # Mock Coordinates for the Map (Approximate for Sully-sur-Loire POIs)
 poi_coords = {
@@ -105,34 +147,65 @@ input_data = pd.DataFrame([[er, ks2, ks3, ks4, ks_fp, of, qmax, tm]],
                           columns=['er', 'ks2', 'ks3', 'ks4', 'ks_fp', 'of', 'qmax', 'tm'])
 
 # --- SIDEBAR ---
-st.sidebar.header("🧠 Moteur de Prédiction")
+st.sidebar.header("Moteur de Prédiction")
 model_choice = st.sidebar.selectbox(
     "Choisir le modèle :",
-    ["Ensemble (Moyenne)", "XGBoost", "Random Forest"],
+    ["Ensemble (Moyenne)", "XGBoost", "RandomForest", "Ridge", "NeuralNet"],
     help="L'ensemble fait la moyenne des modèles pour plus de robustesse."
 )
 
 # --- PRÉDICTIONS ---
 preds = {}
 
-# On prépare les données (Scaled pour certains, Raw pour d'autres si besoin, ici on simplifie avec scaled partout si entraîné ainsi)
-input_scaled = scaler.transform(input_data)
-input_scaled_df = pd.DataFrame(input_scaled, columns=input_data.columns)
+# Helper to scale if scaler exists, else raw
+def get_scaled(name, df):
+    if name in scalers and scalers[name] is not None:
+        try:
+            return pd.DataFrame(scalers[name].transform(df), columns=df.columns)
+        except Exception as e:
+            # Silently return raw if scaling fails
+            return df
+    return df
+
+input_xgb = get_scaled("XGBoost", input_data)
+input_rf = get_scaled("RandomForest", input_data)
+input_ridge = get_scaled("Ridge", input_data)
+input_nn = get_scaled("NeuralNet", input_data)
 
 for t in targets:
-    models_available = model_store[t]
+    models_available = model_store.get(t, {})
+    val = 0.0
     
     if model_choice == "Ensemble (Moyenne)":
-        # Moyenne de tous les modèles chargés pour ce lieu
-        val_xgb = models_available.get("XGBoost").predict(input_scaled_df)[0] if "XGBoost" in models_available else 0
-        val_rf = models_available.get("Random Forest").predict(input_data)[0] if "Random Forest" in models_available else 0
-        val = (val_xgb + val_rf) / 2
+        count = 0
+        total = 0.0
         
-    elif model_choice == "XGBoost":
-        val = models_available["XGBoost"].predict(input_scaled_df)[0]
+        if "XGBoost" in models_available:
+            total += safe_scalar_predict(models_available["XGBoost"], input_xgb)
+            count += 1
+        if "RandomForest" in models_available:
+            total += safe_scalar_predict(models_available["RandomForest"], input_rf)
+            count += 1
+        if "Ridge" in models_available:
+            total += safe_scalar_predict(models_available["Ridge"], input_ridge)
+            count += 1
+        if "NeuralNet" in models_available:
+            total += safe_scalar_predict(models_available["NeuralNet"], input_nn)
+            count += 1
+            
+        val = total / count if count > 0 else 0.0
         
-    elif model_choice == "Random Forest":
-        val = models_available["Random Forest"].predict(input_data)[0]
+    elif model_choice == "XGBoost" and "XGBoost" in models_available:
+        val = safe_scalar_predict(models_available["XGBoost"], input_xgb)
+        
+    elif model_choice == "RandomForest" and "RandomForest" in models_available:
+        val = safe_scalar_predict(models_available["RandomForest"], input_rf)
+
+    elif model_choice == "Ridge" and "Ridge" in models_available:
+        val = safe_scalar_predict(models_available["Ridge"], input_ridge)
+
+    elif model_choice == "NeuralNet" and "NeuralNet" in models_available:
+        val = safe_scalar_predict(models_available["NeuralNet"], input_nn)
 
     preds[t] = max(0.0, val)
 
@@ -141,7 +214,7 @@ st.title("🌊 Smart Flood Defense: Sully-sur-Loire")
 st.markdown("### Real-time Impact Assessment")
 
 # TAB STRUCTURE
-tab1, tab2, tab3 = st.tabs(["🚀 Simulation & Map", "📈 Sensitivity Analysis", "🧠 Model Transparency"])
+tab1, tab2, tab3 = st.tabs(["Simulation & Map", "Sensitivity Analysis", "Model Transparency"])
 
 # --- TAB 1: SIMULATION ---
 with tab1:
@@ -188,30 +261,56 @@ with tab1:
         colors = ['green' if x < 1.0 else 'red' for x in preds.values()]
         ax.bar(list(preds.keys()), list(preds.values()), color=colors)
         ax.set_ylabel("Water Level (m)")
+        ax.set_xticks(range(len(targets)))
         ax.set_xticklabels([t.replace("_", "\n").title() for t in targets], rotation=45)
         st.pyplot(fig)
 
 # --- TAB 2: SENSITIVITY (DYNAMICS) ---
 with tab2:
     st.subheader("📉 How does Flow Rate (Qmax) impact flooding?")
-    st.write("This simulation holds all parameters constant (vegetation, topography) and only varies the River Flow.")
+    st.write(f"Simulation based on: **{model_choice}**")
     
     # Create the curve data
     q_range = np.linspace(3000, 12000, 50)
-    sensitivity_data = []
     
     # Repeat the current user input 50 times
     temp_df = pd.concat([input_data]*50, ignore_index=True)
     temp_df['qmax'] = q_range # Overwrite Qmax column
     
-    # Scale
-    temp_scaled = scaler.transform(temp_df)
-    temp_scaled_df = pd.DataFrame(temp_scaled, columns=input_data.columns)
+    # Pre-calculate scaled versions for the sensitivity loop
+    temp_xgb = get_scaled("XGBoost", temp_df)
+    temp_rf = get_scaled("RandomForest", temp_df)
+    temp_ridge = get_scaled("Ridge", temp_df)
+    temp_nn = get_scaled("NeuralNet", temp_df)
     
     # Predict for all targets
     chart_data = pd.DataFrame(index=q_range)
+    
     for t in targets:
-        p = models[t].predict(temp_scaled_df)
+        models_available = model_store.get(t, {})
+        
+        # Default to 0 values
+        p = np.zeros(50)
+        
+        if model_choice == "Ensemble (Moyenne)":
+            v_xgb = safe_vector_predict(models_available["XGBoost"], temp_xgb) if "XGBoost" in models_available else np.zeros(50)
+            v_rf = safe_vector_predict(models_available["RandomForest"], temp_rf) if "RandomForest" in models_available else np.zeros(50)
+            v_ridge = safe_vector_predict(models_available["Ridge"], temp_ridge) if "Ridge" in models_available else np.zeros(50)
+            v_nn = safe_vector_predict(models_available["NeuralNet"], temp_nn) if "NeuralNet" in models_available else np.zeros(50)
+            p = (v_xgb + v_rf + v_ridge + v_nn) / 4
+            
+        elif model_choice == "XGBoost" and "XGBoost" in models_available:
+            p = safe_vector_predict(models_available["XGBoost"], temp_xgb)
+                
+        elif model_choice == "RandomForest" and "RandomForest" in models_available:
+             p = safe_vector_predict(models_available["RandomForest"], temp_rf)
+
+        elif model_choice == "Ridge" and "Ridge" in models_available:
+             p = safe_vector_predict(models_available["Ridge"], temp_ridge)
+
+        elif model_choice == "NeuralNet" and "NeuralNet" in models_available:
+             p = safe_vector_predict(models_available["NeuralNet"], temp_nn)
+
         chart_data[t] = np.maximum(p, 0)
         
     st.line_chart(chart_data)
@@ -224,21 +323,27 @@ with tab3:
     st.markdown("### 1. Quels facteurs influencent la crue ?")
     st.info("Comparaison de ce que les modèles 'regardent' pour faire leur prédiction.")
     
-    c1, c2 = st.columns(2)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.write("**Vision Globale (Random Forest)**")
-        st.image("randomforest/graphs/graph1_global_importance.png", use_column_width=True)
+        st.write("**Vision Globale (RF)**")
+        safe_image("randomforest/graphs/graph1_global_importance.png", use_column_width=True)
     with c2:
-        st.write("**Vision Locale (XGBoost - Parc Château)**")
-        st.image("boosting/importance_parc_chateau.png", use_column_width=True)
-
+        st.write("**Vision Locale (XGB - Parc)**")
+        safe_image("boosting/importance_parc_chateau.png", use_column_width=True)
+    with c3:
+        st.write("**Vision Locale (RF - Parc)**")
+        safe_image("randomforest/graphs/graph4_location_importances.png", use_column_width=True)
+    with c4:
+        st.write("**Comparaison Physique**")
+        safe_image("randomforest/graphs/graph3_physics_comparison.png", use_column_width=True)
+    
     st.markdown("### 2. Fiabilité des modèles")
     st.write("Performance sur les données de test (Graphiques générés par l'équipe)")
     
-    lieu_valid = st.select_slider("Choisir un lieu pour voir la précision :", options=targets)
+    lieu_valid = st.selectbox("Choisir un lieu pour voir la précision :", options=targets)
     
-    img_path = f"neural_network/plots/{lieu_valid}/actual_vs_predicted.png"
-    if os.path.exists(img_path):
-        st.image(img_path, caption=f"Prédiction vs Réalité ({lieu_valid})")
+    img_path = BASE_DIR / f"neural_network/plots/{lieu_valid}/actual_vs_predicted.png"
+    if img_path.exists():
+        st.image(str(img_path), caption=f"Prédiction vs Réalité ({lieu_valid})")
     else:
         st.warning("Graphique de validation manquant pour ce lieu.")
