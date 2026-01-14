@@ -4,14 +4,16 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
 import os
+import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 
 # --- CONFIGURATION ---
-DATA_PATH = "../dataset_final_Sully.csv"
-TARGETS = ['Parc_Chateau', 'Centre_Sully', 'Gare_Sully', 'Caserne_Pompiers']
+DATA_PATH = "/home/yanis/Documents/projetDataScience/boosting/training_matrix_sully.csv"
+TARGETS = ['parc_chateau', 'centre_sully', 'gare_sully', 'caserne_pompiers']
 INPUT_FEATURES = ['er', 'ks2', 'ks3', 'ks4', 'ks_fp', 'of', 'qmax', 'tm']
-MODEL_DIR = "."
+# Models are in tensorflow/ folder relative to this script
+MODEL_DIR = "tensorflow" 
 
 def load_data_and_prepare():
     if not os.path.exists(DATA_PATH):
@@ -21,39 +23,47 @@ def load_data_and_prepare():
     X = df[INPUT_FEATURES]
     y = df[TARGETS]
     
-    # Strict Protocol Split
+    # Strict Protocol Split (Must match training!)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     # Load Scaler
-    scaler = joblib.load(os.path.join(MODEL_DIR, "scaler.pkl"))
+    scaler_path = os.path.join(MODEL_DIR, "scaler.pkl")
+    if not os.path.exists(scaler_path):
+        raise FileNotFoundError(f"Scaler not found at {scaler_path}. Please run tensorflow/keras_model.py first.")
+        
+    scaler = joblib.load(scaler_path)
     X_test_scaled = scaler.transform(X_test)
     
     return df, X_test_scaled, y_test
 
-    plt.tight_layout()
-    # plt.savefig("actual_vs_predicted.png", dpi=300) # Removed global plot
-    # print("Saved actual_vs_predicted.png")
-
 def plot_residuals(X_test_scaled, y_test, df_test_original):
     # Ensure Test Set aligns with original values for plotting vs features
-    # This requires a bit of care if shuffling was involved, but X_test_scaled corresponds to y_test rows.
-    # We need the unscaled features for "Residuals vs Qmax". 
-    # Since we did a random split, we can't easily map back unless we split the original DF the same way.
-    # Let's rely on the fact that train_test_split is deterministic with random_state=42.
-    
     # Re-split original DF to get unscaled features for test set
     _, X_test_orig, _, _ = train_test_split(df_test_original[INPUT_FEATURES], df_test_original[TARGETS], test_size=0.2, random_state=42)
     
+    display_names = {
+        'parc_chateau': 'Parc_Chateau',
+        'centre_sully': 'Centre_Sully',
+        'gare_sully': 'Gare_Sully',
+        'caserne_pompiers': 'Caserne_Pompiers'
+    }
+
     for lieu in TARGETS:
-        # Create Directory
-        save_dir = f"plots/{lieu}"
+        # Create Directory with Capitalized Name
+        dir_name = display_names.get(lieu, lieu)
+        save_dir = f"plots/{dir_name}"
         os.makedirs(save_dir, exist_ok=True)
         
-        model_path = os.path.join(MODEL_DIR, f"mlp_model_{lieu}.pkl")
-        if not os.path.exists(model_path): continue
+        model_path = os.path.join(MODEL_DIR, f"keras_model_{lieu}.keras")
+        if not os.path.exists(model_path): 
+            print(f"Model not found for {lieu} at {model_path}")
+            continue
             
-        model = joblib.load(model_path)
-        y_pred = model.predict(X_test_scaled)
+        print(f"Loading model for {lieu}...")
+        model = tf.keras.models.load_model(model_path)
+        
+        # Predict (Keras returns [N, 1], we need [N,])
+        y_pred = model.predict(X_test_scaled, verbose=0).flatten()
         y_true = y_test[lieu]
         residuals = y_true - y_pred
         
@@ -92,7 +102,6 @@ def plot_residuals(X_test_scaled, y_test, df_test_original):
         plt.close()
         
         # 4. Residuals vs Qmax (PHYSICS CHECK)
-        # This checks if the model fails for extreme events
         plt.figure(figsize=(8, 6))
         sns.scatterplot(x=X_test_orig['qmax'], y=residuals, alpha=0.6, hue=residuals.abs(), palette='coolwarm')
         plt.axhline(0, color='black', linestyle='--', lw=1)
@@ -106,12 +115,11 @@ def plot_residuals(X_test_scaled, y_test, df_test_original):
         print(f"Generated 4 plots for {lieu} in {save_dir}/")
 
 def main():
-    print("--- STARTING VISUALIZATION ---")
+    print("--- STARTING VISUALIZATION (KERAS) ---")
     df, X_test_scaled, y_test = load_data_and_prepare()
     
     # 1. Global Analysis
     print("Generating Feature Correlation Matrix...")
-    # Global plot can stay in root or move to a 'Global' folder. Let's keep it root for now or 'Global'
     os.makedirs("plots/Global", exist_ok=True)
     
     plt.figure(figsize=(10, 8))
@@ -124,7 +132,6 @@ def main():
     
     # 2. Per-Location Analysis
     print("Generating Per-Location Plots...")
-    # We pass 'df' (the original loaded dataframe) to extract unscaled features for Qmax plot
     plot_residuals(X_test_scaled, y_test, df)
     
     print("--- DONE ---")
