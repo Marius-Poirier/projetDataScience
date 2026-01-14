@@ -318,32 +318,78 @@ with tab2:
 
 # --- TAB 3: MODEL TRANSPARENCY (THE WHY) ---
 with tab3:
-    st.header("🔍 Model Interpretation & Checking")
+    st.header("🔍 Model Interpretation & Performance")
     
-    st.markdown("### 1. Quels facteurs influencent la crue ?")
-    st.info("Comparaison de ce que les modèles 'regardent' pour faire leur prédiction.")
+    # 1. GLOBAL PERFORMANCE
+    st.markdown("## 1. Global Model Performance")
+    st.info("Comparaison des performances des différents modèles sur l'ensemble des cibles.")
     
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2 = st.columns(2)
     with c1:
-        st.write("**Vision Globale (RF)**")
-        safe_image("randomforest/graphs/graph1_global_importance.png", use_column_width=True)
+        st.write("**Comparaison Globale (R2 Score)**")
+        safe_image("randomforest/graphs/graph_comparison_5models_final.png", 
+                  caption="Comparaison des performances (5 modèles)", use_column_width=True)
     with c2:
-        st.write("**Vision Locale (XGB - Parc)**")
-        safe_image("boosting/importance_parc_chateau.png", use_column_width=True)
-    with c3:
-        st.write("**Vision Locale (RF - Parc)**")
+        st.write("**Précision Globale**")
+        safe_image("randomforest/graphs/graph_global_accuracy.png", 
+                  caption="Précision globale par modèle", use_column_width=True)
+
+    st.markdown("---")
+
+    # 2. FEATURE IMPORTANCE
+    st.markdown("## 2. Feature Importance (Explicabilité)")
+    st.write("Quels paramètres influencent le plus les prédictions ?")
+    
+    # Global & Ridge
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**Vision Globale (Random Forest)**")
+        safe_image("randomforest/graphs/graph1_global_importance.png", 
+                  caption="Importance moyenne des variables (RF)", use_column_width=True)
+    with c2:
+        st.write("**Stabilité des Coefficients (Ridge/Lasso)**")
+        safe_image("modele_Ridge/graphs/ridge_lasso_paths.png", 
+                  caption="Chemin de régularisation", use_column_width=True)
+        
+    # Local Decomposition
+    st.markdown("#### Focus Local : Influence par Lieu")
+    location_choice = st.selectbox("Choisir le lieu pour l'explicabilité :", targets, key="loc_imp")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write(f"**XGBoost Importance ({location_choice})**")
+        safe_image(f"boosting/importance_{location_choice}.png", use_column_width=True)
+    with c2:
+        st.write("**Comparaison Sectorielle (RF)**")
         safe_image("randomforest/graphs/graph4_location_importances.png", use_column_width=True)
-    with c4:
-        st.write("**Comparaison Physique**")
-        safe_image("randomforest/graphs/graph3_physics_comparison.png", use_column_width=True)
+
+    st.markdown("---")
+
+    # 3. PHYSICS CONSISTENCY
+    st.markdown("## 3. Cohérence Physique")
+    st.write("Les modèles respectent-ils les lois de l'hydraulique ? (ex: le niveau monte si Qmax augmente)")
+    safe_image("physics_analysis/reynolds_vs_water_level.png", use_column_width=True)
+    st.write("On peut voir que les données sont cohérentes avec la loi de Reynolds. Les lois de l'hydraulique sont respectées.")
+    st.markdown("---")
     
-    st.markdown("### 2. Fiabilité des modèles")
-    st.write("Performance sur les données de test (Graphiques générés par l'équipe)")
+    # 4. NEURAL NETWORK DEEP DIVE
+    st.markdown("## 4. Focus: Deep Learning Diagnostics")
+    st.write("Analyse détaillée des performances du **Réseau de Neurones** (Meilleur modèle complexe).")
     
-    lieu_valid = st.selectbox("Choisir un lieu pour voir la précision :", options=targets)
+    loc_nn = st.selectbox("Choisir le lieu pour le diagnostic :", targets, key="loc_nn", format_func=lambda x: x.replace("_", " ").title())
     
-    img_path = BASE_DIR / f"neural_network/plots/{lieu_valid}/actual_vs_predicted.png"
-    if img_path.exists():
-        st.image(str(img_path), caption=f"Prédiction vs Réalité ({lieu_valid})")
-    else:
-        st.warning("Graphique de validation manquant pour ce lieu.")
+    folder_map = {
+        'parc_chateau': 'Parc_Chateau',
+        'centre_sully': 'Centre_Sully',
+        'gare_sully': 'Gare_Sully',
+        'caserne_pompiers': 'Caserne_Pompiers'
+    }
+    target_folder = folder_map.get(loc_nn, "Global")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        safe_image(f"neural_network/plots/{target_folder}/actual_vs_predicted.png", caption="Actual vs Predicted")
+        safe_image(f"neural_network/plots/{target_folder}/residuals_vs_qmax.png", caption="Residuals vs Qmax (Physique)")
+    with c2:
+        safe_image(f"neural_network/plots/{target_folder}/residuals_vs_predicted.png", caption="Residuals Distribution")
+        safe_image(f"neural_network/plots/{target_folder}/error_distribution.png", caption="Error Histogram")
