@@ -224,21 +224,27 @@ with tab3:
     st.markdown("### 1. Quels facteurs influencent la crue ?")
     st.info("Comparaison de ce que les modèles 'regardent' pour faire leur prédiction.")
     
-    c1, c2 = st.columns(2)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.write("**Vision Globale (Random Forest)**")
-        st.image("randomforest/graphs/graph1_global_importance.png", use_column_width=True)
+        st.write("**Vision Globale (RF)**")
+        safe_image("randomforest/graphs/graph1_global_importance.png", use_column_width=True)
     with c2:
-        st.write("**Vision Locale (XGBoost - Parc Château)**")
-        st.image("boosting/importance_parc_chateau.png", use_column_width=True)
-
+        st.write("**Vision Locale (XGB - Parc)**")
+        safe_image("boosting/importance_parc_chateau.png", use_column_width=True)
+    with c3:
+        st.write("**Vision Locale (RF - Parc)**")
+        safe_image("randomforest/graphs/graph4_location_importances.png", use_column_width=True)
+    with c4:
+        st.write("**Comparaison Physique**")
+        safe_image("randomforest/graphs/graph3_physics_comparison.png", use_column_width=True)
+    
     st.markdown("### 2. Fiabilité des modèles")
     st.write("Performance sur les données de test (Graphiques générés par l'équipe)")
     
-    lieu_valid = st.select_slider("Choisir un lieu pour voir la précision :", options=targets)
+    lieu_valid = st.selectbox("Choisir un lieu pour voir la précision :", options=targets)
     
-    img_path = f"neural_network/plots/{lieu_valid}/actual_vs_predicted.png"
-    if os.path.exists(img_path):
-        st.image(img_path, caption=f"Prédiction vs Réalité ({lieu_valid})")
+    img_path = BASE_DIR / f"neural_network/plots/{lieu_valid}/actual_vs_predicted.png"
+    if img_path.exists():
+        st.image(str(img_path), caption=f"Prédiction vs Réalité ({lieu_valid})")
     else:
         st.warning("Graphique de validation manquant pour ce lieu.")
